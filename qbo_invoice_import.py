@@ -185,11 +185,8 @@ def find_or_create_customer(client: QuickBooks, name: str) -> Optional[Customer]
         customers = Customer.filter(DisplayName=name, qb=client)
         if customers:
             return customers[0]
-        customer = Customer()
-        customer.DisplayName = name
-        customer.save(qb=client)
-        print(f"✅ Created new customer: {name}")
-        return customer
+        print(f"❌ Customer '{name}' not found in QuickBooks. Please create the customer first.")
+        return None
     except Exception as exc:
         print(f"❌ Error with customer '{name}': {exc}")
         return None
@@ -200,13 +197,8 @@ def find_or_create_item(client: QuickBooks, item_name: str) -> Optional[Item]:
         items = Item.filter(Name=item_name, qb=client)
         if items:
             return items[0]
-        item = Item()
-        item.Name = item_name
-        item.Type = "Service"
-        item.IncomeAccountRef = {"value": "79", "name": "Sales"}
-        item.save(qb=client)
-        print(f"✅ Created new item: {item_name}")
-        return item
+        print(f"❌ Item '{item_name}' not found in QuickBooks. Please create the item first.")
+        return None
     except Exception as exc:
         print(f"❌ Error with item '{item_name}': {exc}")
         return None
@@ -218,15 +210,15 @@ def find_or_create_item(client: QuickBooks, item_name: str) -> Optional[Item]:
 def _apply_qty_rate(detail: SalesItemLineDetail, qty: Optional[float], rate: Optional[float]):
     """Overwrite SDK's default 0 values so blank CSV cols stay truly blank."""
     # Reset defaults introduced by python‑quickbooks
-    detail.Qty = None
-    detail.UnitPrice = None
-    detail.TaxInclusiveAmt = None  # Also defaults to 0 in the SDK
+    detail.Qty = None  # type: ignore
+    detail.UnitPrice = None  # type: ignore
+    detail.TaxInclusiveAmt = None  # type: ignore
 
     # Now apply real values if provided
     if qty is not None:
-        detail.Qty = qty
+        detail.Qty = qty  # type: ignore
     if rate is not None:
-        detail.UnitPrice = rate
+        detail.UnitPrice = rate  # type: ignore
 
 # ---------------------------------------------------------------------------
 # Core Invoice creation routine
@@ -246,13 +238,13 @@ def create_quickbooks_invoice(
         if not customer:
             return False
         invoice = Invoice()
-        invoice.CustomerRef = customer.to_ref()
+        invoice.CustomerRef = customer.to_ref()  # type: ignore
         invoice.TxnDate = data["InvoiceDate"]
-        invoice.DocNumber = inv_no
+        invoice.DocNumber = inv_no  # type: ignore
         if not only_required:
             invoice.DueDate = data["DueDate"]
             if data.get("CustomerMemo"):
-                invoice.CustomerMemo = {"value": data["CustomerMemo"]}
+                invoice.CustomerMemo = {"value": data["CustomerMemo"]}  # type: ignore
 
         lines: List[SalesItemLine] = []
         for row in data["LineItems"]:
@@ -278,14 +270,14 @@ def create_quickbooks_invoice(
                     rate = 0 if qty == 0 else round(amount / qty, 4)
 
             detail = SalesItemLineDetail()
-            detail.ItemRef = item.to_ref()
+            detail.ItemRef = item.to_ref()  # type: ignore
             _apply_qty_rate(detail, qty, rate)
 
             line = SalesItemLine()
             if not only_required and row.get("Description"):
                 line.Description = row["Description"]
             line.Amount = amount
-            line.SalesItemLineDetail = detail
+            line.SalesItemLineDetail = detail  # type: ignore
             lines.append(line)
 
         if not lines:
