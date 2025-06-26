@@ -1,0 +1,11 @@
+# Ignore everything
+*
+
+# But not qbo_invoice_import.py
+!qbo_invoice_import.py
+
+# And not .gitignore itself
+!.gitignore
+
+# Ignore directories
+*/ 
