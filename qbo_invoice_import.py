@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-QuickBooks Online – Bulk Invoice Import Script
+QuickBooks Online – Bulk Invoice Import Script
 =============================================
 
-Version 2025‑06‑25 e‑qty‑rate‑optional‑3
+Version 2025‑06‑25 e‑qty‑rate‑optional‑3
 
-WHAT’S NEW (patch‑3)
+WHAT'S NEW (patch‑3)
 --------------------
-* **True omission of Qty / UnitPrice / TaxInclusiveAmt when blank.** `python‑quickbooks`
+* **True omission of Qty / UnitPrice / TaxInclusiveAmt when blank.** `python‑quickbooks`
   sets these to **0** by default (see snippet on GitHub showing `self.UnitPrice = 0`
   and `self.Qty = 0`). We now *force them back to `None`* right after object
   instantiation and only overwrite when an explicit value is present.  This keeps
-  your payload fully compliant with Intuit’s "optional" rules.
+  your payload fully compliant with Intuit's "optional" rules.
 * Added helper `_apply_qty_rate(detail, qty, rate)` to tidy the logic.
 * Bumped version tag & changelog accordingly. All CLI flags unchanged.
 """
@@ -25,6 +25,7 @@ import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from dotenv import load_dotenv
 from intuitlib.client import AuthClient
 from quickbooks import QuickBooks
 from quickbooks.objects import (
@@ -35,18 +36,41 @@ from quickbooks.objects import (
     SalesItemLineDetail,
 )
 
+# Load environment variables from .env file
+load_dotenv()
+
 # ---------------------------------------------------------------------------
-# Configuration – ***EDIT THESE FOR YOUR OWN ENVIRONMENT***
+# Configuration – Load from environment variables
 # ---------------------------------------------------------------------------
-CONFIG: Dict[str, Optional[str]] = {
-    "CLIENT_ID": "CLIENT_ID",  # Intuit Developer – Client ID
-    "CLIENT_SECRET": "CLIENT_SECRET",  # Intuit Developer – Client Secret
-    "SANDBOX": True,  # Flip to False for production
-    "REDIRECT_URI": "https://developer.intuit.com/v2/OAuth2Playground/RedirectUrl",
+CONFIG: Dict[str, Optional[str] | bool] = {
+    "CLIENT_ID": os.getenv("CLIENT_ID"),  # Intuit Developer – Client ID
+    "CLIENT_SECRET": os.getenv("CLIENT_SECRET"),  # Intuit Developer – Client Secret
+    "SANDBOX": os.getenv("SANDBOX", "true").lower() == "true",  # Flip to False for production
+    "REDIRECT_URI": os.getenv("REDIRECT_URI", "https://developer.intuit.com/v2/OAuth2Playground/RedirectUrl"),
     "ACCESS_TOKEN": None,
     "REFRESH_TOKEN": None,
     "REALM_ID": None,
 }
+
+def validate_environment() -> bool:
+    """Validate that required environment variables are set."""
+    required_vars = ["CLIENT_ID", "CLIENT_SECRET"]
+    missing_vars = []
+    
+    for var in required_vars:
+        if not os.getenv(var):
+            missing_vars.append(var)
+    
+    if missing_vars:
+        print("❌ Missing required environment variables:")
+        for var in missing_vars:
+            print(f"   - {var}")
+        print("\nPlease create a .env file with your credentials:")
+        print("1. Copy .env.example to .env")
+        print("2. Fill in your actual CLIENT_ID and CLIENT_SECRET values")
+        return False
+    
+    return True
 
 # ---------------------------------------------------------------------------
 # Helper functions
@@ -265,7 +289,7 @@ def create_quickbooks_invoice(
             lines.append(line)
 
         if not lines:
-            print("⚠️  Invoice skipped – no valid line items detected.")
+            print("⚠️  Invoice skipped – no valid line items detected.")
             return False
 
         invoice.Line = lines
@@ -331,8 +355,8 @@ def main() -> None:
 
     print("=== QuickBooks Invoice Import Script ===")
 
-    if CONFIG["CLIENT_ID"] == "ID":
-        print("❌ Please update CONFIG with your Client ID and Client Secret")
+    # Validate environment variables
+    if not validate_environment():
         sys.exit(1)
 
     if not load_tokens() and not setup_oauth():
