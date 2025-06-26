@@ -224,6 +224,16 @@ def _apply_qty_rate(detail: SalesItemLineDetail, qty: Optional[float], rate: Opt
 # Core Invoice creation routine
 # ---------------------------------------------------------------------------
 
+def invoice_number_exists(client: QuickBooks, doc_number: str) -> bool:
+    """Check if an invoice with the given DocNumber exists in QBO."""
+    try:
+        # The filter method may not be documented, but works for other objects
+        results = Invoice.filter(DocNumber=doc_number, qb=client)
+        return bool(results)
+    except Exception as exc:
+        print(f"❌ Error checking for existing invoice number '{doc_number}': {exc}")
+        return False
+
 def create_quickbooks_invoice(
     client: QuickBooks,
     data: Dict[str, Any],
@@ -234,6 +244,10 @@ def create_quickbooks_invoice(
     auto_fill_qty_rate: bool = False,
 ) -> bool:
     try:
+        # Check if invoice number already exists
+        if invoice_number_exists(client, inv_no):
+            print(f"❌ Invoice number '{inv_no}' already exists in QBO. Skipping import.")
+            return False
         customer = find_or_create_customer(client, data["Customer"])
         if not customer:
             return False
