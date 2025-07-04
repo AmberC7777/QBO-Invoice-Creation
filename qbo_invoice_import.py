@@ -34,7 +34,12 @@ from quickbooks.objects import (
     Item,
     SalesItemLine,
     SalesItemLineDetail,
+    # SalesTerm does not exist in python-quickbooks; use Term
 )
+try:
+    from quickbooks.objects import Term
+except ImportError:
+    Term = None
 
 # Load environment variables from .env file
 load_dotenv()
@@ -109,6 +114,7 @@ def read_invoices(csv_path: str) -> Dict[str, Any]:
                     "InvoiceDate": parse_date(row["InvoiceDate"]),
                     "DueDate": parse_date(row["DueDate"]),
                     "CustomerMemo": row.get("CustomerMemo", "").strip(),
+                    "Terms": row.get("Terms", "").strip(),  # Add Terms
                     "LineItems": [],
                 }
             invoices[inv_no]["LineItems"].append(
@@ -203,6 +209,21 @@ def find_or_create_item(client: QuickBooks, item_name: str) -> Optional[Item]:
         print(f"❌ Error with item '{item_name}': {exc}")
         return None
 
+def find_sales_term_by_name(client: QuickBooks, term_name: str):
+    """Find a Term by name. Returns the object or None."""
+    if not Term:
+        print("❌ Term object not available in python-quickbooks.")
+        return None
+    try:
+        terms = Term.filter(Name=term_name, qb=client)
+        if terms:
+            return terms[0]
+        print(f"❌ Term '{term_name}' not found in QuickBooks. Please create the term first.")
+        return None
+    except Exception as exc:
+        print(f"❌ Error with term '{term_name}': {exc}")
+        return None
+
 # ---------------------------------------------------------------------------
 # Utility to strip default zeros
 # ---------------------------------------------------------------------------
@@ -259,6 +280,11 @@ def create_quickbooks_invoice(
             invoice.DueDate = data["DueDate"]
             if data.get("CustomerMemo"):
                 invoice.CustomerMemo = {"value": data["CustomerMemo"]}  # type: ignore
+            # Set SalesTermRef if Terms is present
+            if data.get("Terms"):
+                term = find_sales_term_by_name(client, data["Terms"])
+                if term:
+                    invoice.SalesTermRef = term.to_ref()  # type: ignore
 
         lines: List[SalesItemLine] = []
         for row in data["LineItems"]:
