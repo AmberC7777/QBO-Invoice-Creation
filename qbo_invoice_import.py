@@ -3,17 +3,29 @@
 QuickBooks Online – Bulk Invoice Import Script
 =============================================
 
-Version 2025‑06‑25 e‑qty‑rate‑optional‑3
+Version 2025-07-28-token-refresh-2
 
-WHAT'S NEW (patch‑3)
+WHAT'S NEW (token-refresh-2)
 --------------------
-* **True omission of Qty / UnitPrice / TaxInclusiveAmt when blank.** `python‑quickbooks`
-  sets these to **0** by default (see snippet on GitHub showing `self.UnitPrice = 0`
-  and `self.Qty = 0`). We now *force them back to `None`* right after object
-  instantiation and only overwrite when an explicit value is present.  This keeps
-  your payload fully compliant with Intuit's "optional" rules.
-* Added helper `_apply_qty_rate(detail, qty, rate)` to tidy the logic.
-* Bumped version tag & changelog accordingly. All CLI flags unchanged.
+* **Fixed Infinite Loop.** Corrected the token refresh logic to prevent an
+  infinite loop if the refreshed token is also invalid. The script now
+  attempts to refresh and retry the failed operation only once. If the
+  second attempt fails, the script aborts.
+
+WHAT'S NEW (token-refresh-1)
+--------------------
+* **Automatic Token Refresh.** The script now detects a 401 Authentication Error,
+  automatically refreshes the access token using the refresh token, saves the
+  new tokens to `qb_tokens.json`, and retries the failed operation.
+* **Graceful Exit on Auth Failure.** If the token refresh fails, the script
+  will now abort the import process to prevent repeated errors.
+* Added `AuthorizationException` handling to the core processing loop.
+
+WHAT'S NEW (patch-3)
+--------------------
+* **True omission of Qty / UnitPrice / TaxInclusiveAmt when blank.** `python-quickbooks`
+  sets these to **0** by default. This script now forces them to `None` if blank
+  in the CSV, ensuring compliance with Intuit's API.
 """
 from __future__ import annotations
 
@@ -28,13 +40,14 @@ from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 from intuitlib.client import AuthClient
 from quickbooks import QuickBooks
+# Import AuthorizationException for handling 401 errors
+from quickbooks.exceptions import AuthorizationException
 from quickbooks.objects import (
     Customer,
     Invoice,
     Item,
     SalesItemLine,
     SalesItemLineDetail,
-    # SalesTerm does not exist in python-quickbooks; use Term
 )
 try:
     from quickbooks.objects import Term
@@ -48,9 +61,9 @@ load_dotenv()
 # Configuration – Load from environment variables
 # ---------------------------------------------------------------------------
 CONFIG: Dict[str, Optional[str] | bool] = {
-    "CLIENT_ID": os.getenv("CLIENT_ID"),  # Intuit Developer – Client ID
-    "CLIENT_SECRET": os.getenv("CLIENT_SECRET"),  # Intuit Developer – Client Secret
-    "SANDBOX": os.getenv("SANDBOX", "true").lower() == "true",  # Flip to False for production
+    "CLIENT_ID": os.getenv("CLIENT_ID"),
+    "CLIENT_SECRET": os.getenv("CLIENT_SECRET"),
+    "SANDBOX": os.getenv("SANDBOX", "true").lower() == "true",
     "REDIRECT_URI": os.getenv("REDIRECT_URI", "https://developer.intuit.com/v2/OAuth2Playground/RedirectUrl"),
     "ACCESS_TOKEN": None,
     "REFRESH_TOKEN": None,
@@ -60,19 +73,13 @@ CONFIG: Dict[str, Optional[str] | bool] = {
 def validate_environment() -> bool:
     """Validate that required environment variables are set."""
     required_vars = ["CLIENT_ID", "CLIENT_SECRET"]
-    missing_vars = []
-    
-    for var in required_vars:
-        if not os.getenv(var):
-            missing_vars.append(var)
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
     
     if missing_vars:
         print("❌ Missing required environment variables:")
         for var in missing_vars:
             print(f"   - {var}")
-        print("\nPlease create a .env file with your credentials:")
-        print("1. Copy .env.example to .env")
-        print("2. Fill in your actual CLIENT_ID and CLIENT_SECRET values")
+        print("\nPlease create a .env file with your credentials.")
         return False
     
     return True
@@ -82,26 +89,20 @@ def validate_environment() -> bool:
 # ---------------------------------------------------------------------------
 
 def parse_date(date_str: str, fmt: str = "%m/%d/%Y") -> str:
-    """Convert *MM/DD/YYYY* strings to ISO *YYYY‑MM‑DD* for QBO."""
+    """Convert *MM/DD/YYYY* strings to ISO *YYYY-MM-DD* for QBO."""
     return datetime.strptime(date_str.strip(), fmt).date().isoformat()
 
 
 def to_float_or_none(val: str) -> Optional[float]:
     val = val.strip()
-    if not val:
-        return None
-    try:
-        return float(val)
-    except ValueError:
-        return None
-
+    return float(val) if val else None
 
 # ---------------------------------------------------------------------------
 # CSV ingestion
 # ---------------------------------------------------------------------------
 
 def read_invoices(csv_path: str) -> Dict[str, Any]:
-    """Parse a CSV (exported from Excel/Sheets) into a nested dict keyed by InvoiceNo."""
+    """Parse a CSV into a nested dict keyed by InvoiceNo."""
     invoices: Dict[str, Any] = {}
     with open(csv_path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f, skipinitialspace=True)
@@ -114,52 +115,73 @@ def read_invoices(csv_path: str) -> Dict[str, Any]:
                     "InvoiceDate": parse_date(row["InvoiceDate"]),
                     "DueDate": parse_date(row["DueDate"]),
                     "CustomerMemo": row.get("CustomerMemo", "").strip(),
-                    "Terms": row.get("Terms", "").strip(),  # Add Terms
+                    "Terms": row.get("Terms", "").strip(),
                     "LineItems": [],
                 }
-            invoices[inv_no]["LineItems"].append(
-                {
-                    "Item": row.get("Item(Product/Service)", "").strip(),
-                    "Description": row.get("ItemDescription", "").strip(),
-                    "Quantity": to_float_or_none(row.get("ItemQuantity", "")),
-                    "Rate": to_float_or_none(row.get("ItemRate", "")),
-                    "Amount": float(row.get("ItemAmount", 0) or 0),
-                }
-            )
+            invoices[inv_no]["LineItems"].append({
+                "Item": row.get("Item(Product/Service)", "").strip(),
+                "Description": row.get("ItemDescription", "").strip(),
+                "Quantity": to_float_or_none(row.get("ItemQuantity", "")),
+                "Rate": to_float_or_none(row.get("ItemRate", "")),
+                "Amount": float(row.get("ItemAmount", 0) or 0),
+            })
     return invoices
 
 # ---------------------------------------------------------------------------
-# OAuth helpers (unchanged)
+# OAuth helpers
 # ---------------------------------------------------------------------------
 
 def load_tokens() -> bool:
+    """Loads tokens from qb_tokens.json into the global CONFIG."""
     if os.path.exists("qb_tokens.json"):
         with open("qb_tokens.json", "r", encoding="utf-8") as f:
             tokens = json.load(f)
-            CONFIG.update(
-                {
-                    "ACCESS_TOKEN": tokens.get("access_token"),
-                    "REFRESH_TOKEN": tokens.get("refresh_token"),
-                    "REALM_ID": tokens.get("realm_id"),
-                }
-            )
+            CONFIG.update({
+                "ACCESS_TOKEN": tokens.get("access_token"),
+                "REFRESH_TOKEN": tokens.get("refresh_token"),
+                "REALM_ID": tokens.get("realm_id"),
+            })
             return True
     return False
 
+def save_tokens(auth_client: AuthClient) -> None:
+    """Save the latest access and refresh tokens to qb_tokens.json."""
+    token_data = {
+        "access_token": auth_client.access_token,
+        "refresh_token": auth_client.refresh_token,
+        "realm_id": CONFIG["REALM_ID"],
+    }
+    with open("qb_tokens.json", "w", encoding="utf-8") as f:
+        json.dump(token_data, f, indent=4)
+    print("💾 Tokens have been refreshed and saved to qb_tokens.json.")
+
+def refresh_access_token(client: QuickBooks) -> bool:
+    """Refreshes the OAuth2 access token and returns True on success."""
+    try:
+        print("⏳ Refreshing access token...")
+        client.auth_client.refresh()
+        CONFIG["ACCESS_TOKEN"] = client.auth_client.access_token
+        CONFIG["REFRESH_TOKEN"] = client.auth_client.refresh_token
+        save_tokens(client.auth_client)
+        return True
+    except Exception as e:
+        print(f"❌ CRITICAL: Failed to refresh access token: {e}")
+        print("   Please re-authenticate via the OAuth Playground and update qb_tokens.json.")
+        return False
 
 def setup_oauth() -> bool:
+    """Guides user to perform initial OAuth setup."""
     print("=== OAuth Setup Required ===")
-    print(
-        "Run the OAuth playground (https://appcenter.intuit.com/playground) "
-        "and save the resulting tokens to qb_tokens.json before continuing."
-    )
+    print("Run the OAuth playground (https://appcenter.intuit.com/playground) "
+          "and save the resulting tokens to qb_tokens.json before continuing.")
     return False
 
 # ---------------------------------------------------------------------------
-# QuickBooks helpers (unchanged)
+# QuickBooks helpers
 # ---------------------------------------------------------------------------
 
 def initialize_quickbooks_client() -> Optional[QuickBooks]:
+    """Initializes and returns a QuickBooks client instance."""
     if not CONFIG["ACCESS_TOKEN"] or not CONFIG["REALM_ID"]:
         print("❌ Missing OAuth tokens. Please run the OAuth setup.")
         return None
@@ -183,43 +205,49 @@ def initialize_quickbooks_client() -> Optional[QuickBooks]:
         return None
 
 # ---------------------------------------------------------------------------
-# Customer & Item helpers (unchanged)
+# Customer & Item helpers
 # ---------------------------------------------------------------------------
 
 def find_or_create_customer(client: QuickBooks, name: str) -> Optional[Customer]:
+    """Finds a customer by name. Does not create new ones."""
     try:
         customers = Customer.filter(DisplayName=name, qb=client)
         if customers:
             return customers[0]
-        print(f"❌ Customer '{name}' not found in QuickBooks. Please create the customer first.")
+        print(f"❌ Customer '{name}' not found in QuickBooks. Please create it first.")
         return None
+    except AuthorizationException:
+        raise
     except Exception as exc:
         print(f"❌ Error with customer '{name}': {exc}")
         return None
 
-
 def find_or_create_item(client: QuickBooks, item_name: str) -> Optional[Item]:
+    """Finds an item by name. Does not create new ones."""
     try:
         items = Item.filter(Name=item_name, qb=client)
         if items:
             return items[0]
-        print(f"❌ Item '{item_name}' not found in QuickBooks. Please create the item first.")
+        print(f"❌ Item '{item_name}' not found in QuickBooks. Please create it first.")
         return None
+    except AuthorizationException:
+        raise
     except Exception as exc:
         print(f"❌ Error with item '{item_name}': {exc}")
         return None
 
-def find_sales_term_by_name(client: QuickBooks, term_name: str):
-    """Find a Term by name. Returns the object or None."""
+def find_sales_term_by_name(client: QuickBooks, term_name: str) -> Optional[Term]:
+    """Finds a Term by name."""
     if not Term:
-        print("❌ Term object not available in python-quickbooks.")
         return None
     try:
         terms = Term.filter(Name=term_name, qb=client)
         if terms:
             return terms[0]
-        print(f"❌ Term '{term_name}' not found in QuickBooks. Please create the term first.")
+        print(f"❌ Term '{term_name}' not found. Please create it first.")
         return None
+    except AuthorizationException:
+        raise
     except Exception as exc:
         print(f"❌ Error with term '{term_name}': {exc}")
         return None
@@ -230,16 +258,14 @@ def find_sales_term_by_name(client: QuickBooks, term_name: str):
 
 def _apply_qty_rate(detail: SalesItemLineDetail, qty: Optional[float], rate: Optional[float]):
     """Overwrite SDK's default 0 values so blank CSV cols stay truly blank."""
-    # Reset defaults introduced by python‑quickbooks
-    detail.Qty = None  # type: ignore
-    detail.UnitPrice = None  # type: ignore
-    detail.TaxInclusiveAmt = None  # type: ignore
+    detail.Qty = None
+    detail.UnitPrice = None
+    detail.TaxInclusiveAmt = None
 
-    # Now apply real values if provided
     if qty is not None:
-        detail.Qty = qty  # type: ignore
+        detail.Qty = qty
     if rate is not None:
-        detail.UnitPrice = rate  # type: ignore
+        detail.UnitPrice = rate
 
 # ---------------------------------------------------------------------------
 # Core Invoice creation routine
@@ -248,151 +274,146 @@ def _apply_qty_rate(detail: SalesItemLineDetail, qty: Optional[float], rate: Opt
 def invoice_number_exists(client: QuickBooks, doc_number: str) -> bool:
     """Check if an invoice with the given DocNumber exists in QBO."""
     try:
-        # The filter method may not be documented, but works for other objects
-        results = Invoice.filter(DocNumber=doc_number, qb=client)
-        return bool(results)
+        return bool(Invoice.filter(DocNumber=doc_number, qb=client))
+    except AuthorizationException:
+        raise
     except Exception as exc:
-        print(f"❌ Error checking for existing invoice number '{doc_number}': {exc}")
+        print(f"❌ Error checking for existing invoice '{doc_number}': {exc}")
         return False
 
 def create_quickbooks_invoice(
-    client: QuickBooks,
-    data: Dict[str, Any],
-    inv_no: str,
-    *,
-    debug_json: bool = False,
-    only_required: bool = False,
-    auto_fill_qty_rate: bool = False,
+    client: QuickBooks, data: Dict[str, Any], inv_no: str, *,
+    debug_json: bool, only_required: bool, auto_fill_qty_rate: bool
 ) -> bool:
-    try:
-        # Check if invoice number already exists
-        if invoice_number_exists(client, inv_no):
-            print(f"❌ Invoice number '{inv_no}' already exists in QBO. Skipping import.")
-            return False
-        customer = find_or_create_customer(client, data["Customer"])
-        if not customer:
-            return False
-        invoice = Invoice()
-        invoice.CustomerRef = customer.to_ref()  # type: ignore
-        invoice.TxnDate = data["InvoiceDate"]
-        invoice.DocNumber = inv_no  # type: ignore
-        if not only_required:
-            invoice.DueDate = data["DueDate"]
-            if data.get("CustomerMemo"):
-                invoice.CustomerMemo = {"value": data["CustomerMemo"]}  # type: ignore
-            # Set SalesTermRef if Terms is present
-            if data.get("Terms"):
-                term = find_sales_term_by_name(client, data["Terms"])
-                if term:
-                    invoice.SalesTermRef = term.to_ref()  # type: ignore
-
-        lines: List[SalesItemLine] = []
-        for row in data["LineItems"]:
-            item_name = row.get("Item")
-            if not item_name:
-                continue
-            item = find_or_create_item(client, item_name)
-            if not item:
-                continue
-
-            qty = row.get("Quantity")
-            rate = row.get("Rate")
-            amount = row["Amount"]
-
-            # Legacy mode: auto‑fill Qty/Rate when blank
-            if auto_fill_qty_rate:
-                if qty is None and rate is None:
-                    qty = 1
-                    rate = amount
-                elif qty is None:
-                    qty = 1 if rate == 0 else round(amount / rate, 4)
-                elif rate is None:
-                    rate = 0 if qty == 0 else round(amount / qty, 4)
-
-            detail = SalesItemLineDetail()
-            detail.ItemRef = item.to_ref()  # type: ignore
-            _apply_qty_rate(detail, qty, rate)
-
-            line = SalesItemLine()
-            if not only_required and row.get("Description"):
-                line.Description = row["Description"]
-            line.Amount = amount
-            line.SalesItemLineDetail = detail  # type: ignore
-            lines.append(line)
-
-        if not lines:
-            print("⚠️  Invoice skipped – no valid line items detected.")
-            return False
-
-        invoice.Line = lines
-
-        if debug_json:
-            raw_json = invoice.to_json()
-            pretty_json = json.dumps(json.loads(raw_json), indent=2)
-            print("📤 JSON payload just before save:")
-            print(pretty_json)
-
-        invoice.save(qb=client)
-        print(f"✅ Created invoice {inv_no} (QBO Id: {invoice.Id})")
-        return True
-    except Exception as exc:
-        print(f"❌ Error creating invoice: {exc}")
+    """Constructs and saves a single QuickBooks invoice."""
+    if invoice_number_exists(client, inv_no):
+        print(f"⚠️ Invoice number '{inv_no}' already exists. Skipping.")
         return False
 
+    customer = find_or_create_customer(client, data["Customer"])
+    if not customer: return False
+
+    invoice = Invoice()
+    invoice.CustomerRef = customer.to_ref()
+    invoice.TxnDate = data["InvoiceDate"]
+    invoice.DocNumber = inv_no
+    if not only_required:
+        invoice.DueDate = data["DueDate"]
+        if data.get("CustomerMemo"):
+            invoice.CustomerMemo = {"value": data["CustomerMemo"]}
+        if data.get("Terms"):
+            term = find_sales_term_by_name(client, data["Terms"])
+            if term:
+                invoice.SalesTermRef = term.to_ref()
+
+    lines: List[SalesItemLine] = []
+    for row in data["LineItems"]:
+        if not (item_name := row.get("Item")): continue
+        item = find_or_create_item(client, item_name)
+        if not item: continue
+
+        qty, rate, amount = row.get("Quantity"), row.get("Rate"), row["Amount"]
+
+        if auto_fill_qty_rate:
+            if qty is None and rate is None: qty, rate = 1, amount
+            elif qty is None: qty = 1 if rate == 0 else round(amount / rate, 4)
+            elif rate is None: rate = 0 if qty == 0 else round(amount / qty, 4)
+
+        detail = SalesItemLineDetail()
+        detail.ItemRef = item.to_ref()
+        _apply_qty_rate(detail, qty, rate)
+
+        line = SalesItemLine()
+        if not only_required and row.get("Description"):
+            line.Description = row["Description"]
+        line.Amount = amount
+        line.SalesItemLineDetail = detail
+        lines.append(line)
+
+    if not lines:
+        print("⚠️ Invoice skipped – no valid line items detected.")
+        return False
+
+    invoice.Line = lines
+
+    if debug_json:
+        print("📤 JSON payload just before save:")
+        print(json.dumps(json.loads(invoice.to_json()), indent=2))
+
+    invoice.save(qb=client)
+    print(f"✅ Created invoice {inv_no} (QBO Id: {invoice.Id})")
+    return True
+
 # ---------------------------------------------------------------------------
-# Batch processing & CLI (unchanged)
+# Batch processing & CLI
 # ---------------------------------------------------------------------------
 
 def process_invoices(
-    client: QuickBooks,
-    invoices_data: Dict[str, Any],
-    *,
-    debug_json: bool = False,
-    only_required: bool = False,
-    auto_fill_qty_rate: bool = False,
+    client: QuickBooks, invoices_data: Dict[str, Any], *,
+    debug_json: bool, only_required: bool, auto_fill_qty_rate: bool
 ) -> None:
+    """Processes all invoices, with token refresh and single retry logic."""
     total = len(invoices_data)
     success = 0
     print(f"\n📋 Processing {total} invoices…")
+
     for inv_no, data in invoices_data.items():
         print(f"\n🔄 Processing Invoice {inv_no}…")
-        if create_quickbooks_invoice(
-            client,
-            data,
-            inv_no,
-            debug_json=debug_json,
-            only_required=only_required,
-            auto_fill_qty_rate=auto_fill_qty_rate,
-        ):
-            success += 1
-        else:
-            print(f"❌ Failed to create Invoice {inv_no}")
-    print(f"\n📊 Summary: {success}/{total} invoices processed successfully")
+        try:
+            # First attempt
+            if create_quickbooks_invoice(
+                client, data, inv_no,
+                debug_json=debug_json, only_required=only_required,
+                auto_fill_qty_rate=auto_fill_qty_rate
+            ):
+                success += 1
+        except AuthorizationException:
+            print("🚨 QB Auth Exception 401: Token may have expired.")
+            
+            # Attempt to refresh the token
+            if not refresh_access_token(client):
+                print("🛑 Aborting script because token refresh failed.")
+                break  # Exit the main loop
+
+            # If refresh was successful, retry the operation ONCE.
+            print("✅ Token refreshed. Retrying the same invoice...")
+            try:
+                if create_quickbooks_invoice(
+                    client, data, inv_no,
+                    debug_json=debug_json, only_required=only_required,
+                    auto_fill_qty_rate=auto_fill_qty_rate
+                ):
+                    success += 1
+            except AuthorizationException:
+                print(f"❌ CRITICAL: Auth failed again for invoice {inv_no} after token refresh.")
+                print("   The company may have been disconnected or permissions revoked.")
+                print("🛑 Aborting script.")
+                break # Exit the main loop
+            except Exception as exc:
+                print(f"❌ Unexpected error on retry for invoice {inv_no}: {exc}")
+
+        except Exception as exc:
+            print(f"❌ An unexpected error occurred on invoice {inv_no}: {exc}")
+    
+    print(f"\n📊 Summary: {success}/{total} invoices processed.")
 
 
 # ---------------------------------------------------------------------------
-# Main entry‑point (unchanged)
+# Main entry-point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Bulk‑import invoices into QBO")
+    """Main script execution function."""
+    parser = argparse.ArgumentParser(description="Bulk-import invoices into QBO")
     parser.add_argument("--debug-json", action="store_true", help="Print JSON payload before save")
     parser.add_argument("--only-required", action="store_true", help="Send only mandatory fields")
-    parser.add_argument(
-        "--auto-fill-qty-rate",
-        action="store_true",
-        help="Back‑fill Qty/Rate when blank (legacy behaviour)",
-    )
+    parser.add_argument("--auto-fill-qty-rate", action="store_true", help="Back-fill Qty/Rate when blank (legacy)")
     args = parser.parse_args()
 
     print("=== QuickBooks Invoice Import Script ===")
 
-    # Validate environment variables
-    if not validate_environment():
-        sys.exit(1)
-
-    if not load_tokens() and not setup_oauth():
-        sys.exit(1)
+    if not validate_environment(): sys.exit(1)
+    if not load_tokens() and not setup_oauth(): sys.exit(1)
 
     csv_file = "invoices.csv"
     if not os.path.exists(csv_file):
@@ -404,15 +425,13 @@ def main() -> None:
     print(f"✅ Loaded {len(invoices)} invoices from CSV")
 
     client = initialize_quickbooks_client()
-    if not client:
-        sys.exit(1)
+    if not client: sys.exit(1)
 
     process_invoices(
-        client,
-        invoices,
+        client, invoices,
         debug_json=args.debug_json,
         only_required=args.only_required,
-        auto_fill_qty_rate=args.auto_fill_qty_rate,
+        auto_fill_qty_rate=args.auto_fill_qty_rate
     )
 
     print("\n🏁 Script completed!")
