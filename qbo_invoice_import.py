@@ -3,29 +3,31 @@
 QuickBooks Online – Bulk Invoice Import Script
 =============================================
 
-Version 2025-07-28-token-refresh-2
+Version 2025-07-29-desc-only-lines-2
+
+WHAT'S NEW (desc-only-lines-2)
+--------------------
+* **Corrected Description-Only Lines.** Fixed a bug where description-only
+  lines were being created as standard "Sales" items. The script now correctly
+  sets the `DetailType` to `DescriptionOnly` and omits the `SalesItemLineDetail`
+  object for these lines, as per the Intuit API requirements.
+
+WHAT'S NEW (desc-only-lines-1)
+--------------------
+* **Support for Description-Only Lines.** If the 'Item(Product/Service)' column
+  in the CSV is empty, the script now creates a line item using only the
+  Description and Amount fields.
 
 WHAT'S NEW (token-refresh-2)
 --------------------
 * **Fixed Infinite Loop.** Corrected the token refresh logic to prevent an
-  infinite loop if the refreshed token is also invalid. The script now
-  attempts to refresh and retry the failed operation only once. If the
-  second attempt fails, the script aborts.
+  infinite loop. The script now retries a failed operation only once after
+  a token refresh.
 
 WHAT'S NEW (token-refresh-1)
 --------------------
 * **Automatic Token Refresh.** The script now detects a 401 Authentication Error,
-  automatically refreshes the access token using the refresh token, saves the
-  new tokens to `qb_tokens.json`, and retries the failed operation.
-* **Graceful Exit on Auth Failure.** If the token refresh fails, the script
-  will now abort the import process to prevent repeated errors.
-* Added `AuthorizationException` handling to the core processing loop.
-
-WHAT'S NEW (patch-3)
---------------------
-* **True omission of Qty / UnitPrice / TaxInclusiveAmt when blank.** `python-quickbooks`
-  sets these to **0** by default. This script now forces them to `None` if blank
-  in the CSV, ensuring compliance with Intuit's API.
+  automatically refreshes the access token, and retries the failed operation.
 """
 from __future__ import annotations
 
@@ -308,27 +310,47 @@ def create_quickbooks_invoice(
 
     lines: List[SalesItemLine] = []
     for row in data["LineItems"]:
-        if not (item_name := row.get("Item")): continue
-        item = find_or_create_item(client, item_name)
-        if not item: continue
+        item_name = row.get("Item")
+        
+        if item_name:
+            # This is a standard line with a Product/Service item.
+            line = SalesItemLine()
+            detail = SalesItemLineDetail()
 
-        qty, rate, amount = row.get("Quantity"), row.get("Rate"), row["Amount"]
+            item = find_or_create_item(client, item_name)
+            if not item: continue
 
-        if auto_fill_qty_rate:
-            if qty is None and rate is None: qty, rate = 1, amount
-            elif qty is None: qty = 1 if rate == 0 else round(amount / rate, 4)
-            elif rate is None: rate = 0 if qty == 0 else round(amount / qty, 4)
+            qty, rate, amount = row.get("Quantity"), row.get("Rate"), row["Amount"]
 
-        detail = SalesItemLineDetail()
-        detail.ItemRef = item.to_ref()
-        _apply_qty_rate(detail, qty, rate)
+            if auto_fill_qty_rate:
+                if qty is None and rate is None: qty, rate = 1, amount
+                elif qty is None: qty = 1 if rate == 0 else round(amount / rate, 4)
+                elif rate is None: rate = 0 if qty == 0 else round(amount / qty, 4)
 
-        line = SalesItemLine()
-        if not only_required and row.get("Description"):
-            line.Description = row["Description"]
-        line.Amount = amount
-        line.SalesItemLineDetail = detail
-        lines.append(line)
+            detail.ItemRef = item.to_ref()
+            _apply_qty_rate(detail, qty, rate)
+
+            if not only_required and row.get("Description"):
+                line.Description = row["Description"]
+            line.Amount = amount
+            line.SalesItemLineDetail = detail
+            lines.append(line)
+        
+        else:
+            # This is a Description-Only line. ItemRef is omitted.
+            description = row.get("Description")
+            if not description:
+                print("⚠️ Skipping line with no Item and no Description.")
+                continue
+
+            line = SalesItemLine()
+            line.DetailType = 'DescriptionOnly'  # Set the correct DetailType
+            line.Description = description
+            line.Amount = row["Amount"]
+            # CRITICAL: Do NOT attach a SalesItemLineDetail object.
+            # The library will correctly serialize this as a DescriptionOnly line.
+            lines.append(line)
+
 
     if not lines:
         print("⚠️ Invoice skipped – no valid line items detected.")
