@@ -3,20 +3,19 @@
 QuickBooks Online – Bulk Invoice Import Script
 =============================================
 
-Version 2025-07-29-desc-only-lines-2
+Version 2025-07-29-servicedate-fix-1
+
+WHAT'S NEW (servicedate-fix-1)
+--------------------
+* **Fixed Default ServiceDate.** The script now prevents the `python-quickbooks`
+  library from inserting a default unwanted `ServiceDate` (e.g., 12/31/9999) on
+  line items by explicitly setting it to None.
 
 WHAT'S NEW (desc-only-lines-2)
 --------------------
 * **Corrected Description-Only Lines.** Fixed a bug where description-only
   lines were being created as standard "Sales" items. The script now correctly
-  sets the `DetailType` to `DescriptionOnly` and omits the `SalesItemLineDetail`
-  object for these lines, as per the Intuit API requirements.
-
-WHAT'S NEW (desc-only-lines-1)
---------------------
-* **Support for Description-Only Lines.** If the 'Item(Product/Service)' column
-  in the CSV is empty, the script now creates a line item using only the
-  Description and Amount fields.
+  sets the `DetailType` to `DescriptionOnly` for these lines.
 
 WHAT'S NEW (token-refresh-2)
 --------------------
@@ -259,10 +258,11 @@ def find_sales_term_by_name(client: QuickBooks, term_name: str) -> Optional[Term
 # ---------------------------------------------------------------------------
 
 def _apply_qty_rate(detail: SalesItemLineDetail, qty: Optional[float], rate: Optional[float]):
-    """Overwrite SDK's default 0 values so blank CSV cols stay truly blank."""
+    """Overwrite SDK's default values so blank CSV cols stay truly blank."""
     detail.Qty = None
     detail.UnitPrice = None
     detail.TaxInclusiveAmt = None
+    detail.ServiceDate = None  # FIX: Prevent default ServiceDate from being sent
 
     if qty is not None:
         detail.Qty = qty
