@@ -43,6 +43,7 @@ from intuitlib.client import AuthClient
 from quickbooks import QuickBooks
 # Import AuthorizationException for handling 401 errors
 from quickbooks.exceptions import AuthorizationException
+from qb_auth import refresh_access_token
 from quickbooks.objects import (
     Customer,
     Invoice,
@@ -145,30 +146,6 @@ def load_tokens() -> bool:
             return True
     return False
 
-def save_tokens(auth_client: AuthClient) -> None:
-    """Save the latest access and refresh tokens to qb_tokens.json."""
-    token_data = {
-        "access_token": auth_client.access_token,
-        "refresh_token": auth_client.refresh_token,
-        "realm_id": CONFIG["REALM_ID"],
-    }
-    with open("qb_tokens.json", "w", encoding="utf-8") as f:
-        json.dump(token_data, f, indent=4)
-    print("💾 Tokens have been refreshed and saved to qb_tokens.json.")
-
-def refresh_access_token(client: QuickBooks) -> bool:
-    """Refreshes the OAuth2 access token and returns True on success."""
-    try:
-        print("⏳ Refreshing access token...")
-        client.auth_client.refresh()
-        CONFIG["ACCESS_TOKEN"] = client.auth_client.access_token
-        CONFIG["REFRESH_TOKEN"] = client.auth_client.refresh_token
-        save_tokens(client.auth_client)
-        return True
-    except Exception as e:
-        print(f"❌ CRITICAL: Failed to refresh access token: {e}")
-        print("   Please re-authenticate via the OAuth Playground and update qb_tokens.json.")
-        return False
 
 def setup_oauth() -> bool:
     """Guides user to perform initial OAuth setup."""
@@ -393,7 +370,7 @@ def process_invoices(
             print("🚨 QB Auth Exception 401: Token may have expired.")
             
             # Attempt to refresh the token
-            if not refresh_access_token(client):
+            if not refresh_access_token(client, CONFIG):
                 print("🛑 Aborting script because token refresh failed.")
                 break  # Exit the main loop
 

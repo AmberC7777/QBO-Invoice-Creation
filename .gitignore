@@ -5,6 +5,8 @@
 !qbo_invoice_import.py
 # But not qbo_invoice_download.py
 !qbo_invoice_download.py
+# Include shared auth helper
+!qb_auth.py
 
 # And not .gitignore itself
 !.gitignore
