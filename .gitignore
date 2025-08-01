@@ -5,12 +5,11 @@
 !qbo_invoice_import.py
 # But not qbo_invoice_download.py
 !qbo_invoice_download.py
+# But not qb_auth.py
+!qb_auth.py
 
 # And not .gitignore itself
 !.gitignore
-
-# And not .env.example (template file)
-!.env.example
 
 # Ignore directories
 */ 
