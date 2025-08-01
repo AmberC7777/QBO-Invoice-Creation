@@ -32,6 +32,8 @@ from dotenv import load_dotenv
 from intuitlib.client import AuthClient
 from quickbooks import QuickBooks
 from quickbooks.objects import Invoice
+from quickbooks.exceptions import AuthorizationException
+from qb_auth import refresh_access_token
 
 # Load environment variables from .env file
 load_dotenv()
@@ -128,6 +130,8 @@ def get_invoice_id(client: QuickBooks, invoice_no: str) -> Optional[str]:
             return invoices[0].Id
         print(f"🔍 Invoice with number '{invoice_no}' not found in QBO.")
         return None
+    except AuthorizationException:
+        raise
     except Exception as e:
         print(f"❌ Error looking up invoice '{invoice_no}': {e}")
         return None
@@ -137,15 +141,20 @@ def download_invoice_pdf(client: QuickBooks, invoice_id: str) -> Optional[bytes]
     try:
         base_url = "https://sandbox-quickbooks.api.intuit.com" if CONFIG["SANDBOX"] else "https://quickbooks.api.intuit.com"
         url = f"{base_url}/v3/company/{CONFIG['REALM_ID']}/invoice/{invoice_id}/pdf"
-        
+
         headers = {
             "Authorization": f"Bearer {CONFIG['ACCESS_TOKEN']}",
             "Accept": "application/pdf",
         }
-        
+
         response = requests.get(url, headers=headers)
-        response.raise_for_status() # Raises an HTTPError for bad responses
+        response.raise_for_status()  # Raises an HTTPError for bad responses
         return response.content
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 401:
+            raise AuthorizationException("401 Unauthorized") from e
+        print(f"❌ Failed to download PDF for invoice ID '{invoice_id}': {e}")
+        return None
     except requests.exceptions.RequestException as e:
         print(f"❌ Failed to download PDF for invoice ID '{invoice_id}': {e}")
         return None
@@ -183,13 +192,37 @@ def process_invoices(client: QuickBooks, csv_path: str):
 
                 print(f"\nProcessing InvoiceNo: {invoice_no}")
                 
-                invoice_id = get_invoice_id(client, invoice_no)
+                try:
+                    invoice_id = get_invoice_id(client, invoice_no)
+                except AuthorizationException:
+                    print("🚨 QB Auth Exception 401: Token may have expired.")
+                    if not refresh_access_token(client, CONFIG):
+                        print("🛑 Aborting process because token refresh failed.")
+                        break
+                    print("✅ Token refreshed. Retrying the same invoice...")
+                    try:
+                        invoice_id = get_invoice_id(client, invoice_no)
+                    except AuthorizationException:
+                        print("❌ CRITICAL: Auth failed again after token refresh.")
+                        break
                 if not invoice_id:
-                    continue # Error already logged by get_invoice_id
+                    continue  # Error already logged by get_invoice_id
 
-                pdf_content = download_invoice_pdf(client, invoice_id)
+                try:
+                    pdf_content = download_invoice_pdf(client, invoice_id)
+                except AuthorizationException:
+                    print("🚨 QB Auth Exception 401: Token may have expired.")
+                    if not refresh_access_token(client, CONFIG):
+                        print("🛑 Aborting process because token refresh failed.")
+                        break
+                    print("✅ Token refreshed. Retrying the same invoice...")
+                    try:
+                        pdf_content = download_invoice_pdf(client, invoice_id)
+                    except AuthorizationException:
+                        print("❌ CRITICAL: Auth failed again after token refresh.")
+                        break
                 if not pdf_content:
-                    continue # Error already logged by download_invoice_pdf
+                    continue  # Error already logged by download_invoice_pdf
                 
                 # Ensure the 'invoices' directory exists
                 output_dir = "invoices"

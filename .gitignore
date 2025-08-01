@@ -1,16 +1,14 @@
 # Ignore everything
 *
 
-# But not qbo_invoice_import.py
+# But keep our scripts
 !qbo_invoice_import.py
-# But not qbo_invoice_download.py
 !qbo_invoice_download.py
+!qb_auth.py
 
-# And not .gitignore itself
+# Keep template and config files
 !.gitignore
-
-# And not .env.example (template file)
 !.env.example
 
-# Ignore directories
-*/ 
+# Ignore directories by default
+*/
