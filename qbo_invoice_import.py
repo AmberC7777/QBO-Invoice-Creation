@@ -87,10 +87,16 @@ def to_float_or_none(val: str) -> Optional[float]:
 # ---------------------------------------------------------------------------
 # CSV ingestion
 # ---------------------------------------------------------------------------
-def read_invoices(csv_path: str) -> Dict[str, Any]:
-    """Parse a CSV into a nested dict keyed by InvoiceNo."""
+def read_invoices(csv_path: str, encoding: str = "utf-8-sig") -> Dict[str, Any]:
+    """Parse a CSV into a nested dict keyed by InvoiceNo.
+
+    Tries to open the CSV using ``encoding`` and falls back to ``cp1252`` if
+    decoding fails. If both attempts fail, a ``UnicodeDecodeError`` is raised
+    suggesting that the CSV be saved with UTF-8 encoding.
+    """
     invoices: Dict[str, Any] = {}
-    with open(csv_path, newline="", encoding="utf-8-sig") as f:
+
+    def _parse_csv(f) -> None:
         reader = csv.DictReader(f, skipinitialspace=True)
         reader.fieldnames = [h.strip() for h in reader.fieldnames]
         for row in reader:
@@ -111,6 +117,28 @@ def read_invoices(csv_path: str) -> Dict[str, Any]:
                 "Rate": to_float_or_none(row.get("ItemRate", "")),
                 "Amount": float(row.get("ItemAmount", 0) or 0),
             })
+
+    try:
+        with open(csv_path, newline="", encoding=encoding) as f:
+            _parse_csv(f)
+    except UnicodeDecodeError:
+        fallback = "cp1252"
+        try:
+            with open(csv_path, newline="", encoding=fallback) as f:
+                print(
+                    f"⚠️ Unable to decode file with '{encoding}'. "
+                    f"Retrying with '{fallback}'."
+                )
+                print("   If this issue persists, please save the CSV in UTF-8.")
+                _parse_csv(f)
+        except UnicodeDecodeError as exc:
+            raise UnicodeDecodeError(
+                exc.encoding,
+                exc.object,
+                exc.start,
+                exc.end,
+                f"{exc.reason}. Please save the CSV in UTF-8."
+            ) from exc
     return invoices
 # ---------------------------------------------------------------------------
 # OAuth helpers
