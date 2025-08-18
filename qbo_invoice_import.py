@@ -355,6 +355,16 @@ def process_invoices(
                 print("🛑 Aborting script because token refresh failed.")
                 break  # Exit the main loop
 
+            # Reload tokens and rebuild the client so the retry uses the
+            # freshest credentials saved to qb_tokens.json
+            if not load_tokens():
+                print("🛑 Failed to reload refreshed tokens.")
+                break
+            client = initialize_quickbooks_client()
+            if not client:
+                print("🛑 Failed to reinitialize QuickBooks client after token refresh.")
+                break
+
             # If refresh was successful, retry the operation ONCE.
             print("✅ Token refreshed. Retrying the same invoice...")
             try:
