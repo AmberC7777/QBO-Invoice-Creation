@@ -28,7 +28,7 @@ from intuitlib.client import AuthClient
 from quickbooks import QuickBooks
 from quickbooks.objects import Invoice
 from quickbooks.exceptions import AuthorizationException
-from qb_auth import refresh_access_token
+from qb_auth import refresh_access_token, TOKEN_FILE
 
 # Load environment variables from .env file
 load_dotenv()
@@ -59,9 +59,9 @@ def validate_environment() -> bool:
 # OAuth Helpers (reused from import script)
 # ---------------------------------------------------------------------------
 def load_tokens() -> bool:
-    """Load tokens from qb_tokens.json."""
-    if os.path.exists("qb_tokens.json"):
-        with open("qb_tokens.json", "r", encoding="utf-8") as f:
+    """Load tokens from ``qb_tokens.json``."""
+    if TOKEN_FILE.exists():
+        with open(TOKEN_FILE, "r", encoding="utf-8") as f:
             tokens = json.load(f)
             CONFIG.update({
                 "ACCESS_TOKEN": tokens.get("access_token"),

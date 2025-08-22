@@ -36,7 +36,7 @@ from intuitlib.client import AuthClient
 from quickbooks import QuickBooks
 # Import AuthorizationException for handling 401 errors
 from quickbooks.exceptions import AuthorizationException
-from qb_auth import refresh_access_token
+from qb_auth import refresh_access_token, TOKEN_FILE
 from quickbooks.objects import (
     Customer,
     Invoice,
@@ -144,9 +144,13 @@ def read_invoices(csv_path: str, encoding: str = "utf-8-sig") -> Dict[str, Any]:
 # OAuth helpers
 # ---------------------------------------------------------------------------
 def load_tokens() -> bool:
-    """Loads tokens from qb_tokens.json into the global CONFIG."""
-    if os.path.exists("qb_tokens.json"):
-        with open("qb_tokens.json", "r", encoding="utf-8") as f:
+    """Load tokens from ``qb_tokens.json`` into the global ``CONFIG``.
+
+    ``TOKEN_FILE`` lives alongside the Python scripts, so loading works even if
+    the script is executed from a different current working directory.
+    """
+    if TOKEN_FILE.exists():
+        with open(TOKEN_FILE, "r", encoding="utf-8") as f:
             tokens = json.load(f)
             CONFIG.update({
                 "ACCESS_TOKEN": tokens.get("access_token"),
@@ -354,6 +358,16 @@ def process_invoices(
             if not refresh_access_token(client, CONFIG):
                 print("🛑 Aborting script because token refresh failed.")
                 break  # Exit the main loop
+
+            # Reload tokens and rebuild the client so the retry uses the
+            # freshest credentials saved to qb_tokens.json
+            if not load_tokens():
+                print("🛑 Failed to reload refreshed tokens.")
+                break
+            client = initialize_quickbooks_client()
+            if not client:
+                print("🛑 Failed to reinitialize QuickBooks client after token refresh.")
+                break
 
             # If refresh was successful, retry the operation ONCE.
             print("✅ Token refreshed. Retrying the same invoice...")

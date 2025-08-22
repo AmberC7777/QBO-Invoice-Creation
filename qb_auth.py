@@ -2,13 +2,24 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Dict
 
 from intuitlib.client import AuthClient
 from quickbooks import QuickBooks
 
 
-def refresh_access_token(client: QuickBooks, config: Dict[str, str], token_path: str = "qb_tokens.json") -> bool:
+# Determine the location of ``qb_tokens.json`` relative to this module so that
+# token refresh works regardless of the current working directory used to run
+# the scripts.
+TOKEN_FILE = Path(__file__).with_name("qb_tokens.json")
+
+
+def refresh_access_token(
+    client: QuickBooks,
+    config: Dict[str, str],
+    token_path: Path = TOKEN_FILE,
+) -> bool:
     """Refresh OAuth2 access token using the provided client.
 
     Updates ``config`` with the new tokens and saves them to ``token_path``.
@@ -17,6 +28,7 @@ def refresh_access_token(client: QuickBooks, config: Dict[str, str], token_path:
     try:
         print("⏳ Refreshing access token...")
         client.auth_client.refresh()
+
         # Sync tokens on the QuickBooks client itself
         client.access_token = client.auth_client.access_token
         client.refresh_token = client.auth_client.refresh_token
@@ -37,3 +49,4 @@ def refresh_access_token(client: QuickBooks, config: Dict[str, str], token_path:
         print(f"❌ CRITICAL: Failed to refresh access token: {e}")
         print("   Please re-authenticate via the OAuth Playground and update qb_tokens.json.")
         return False
+
