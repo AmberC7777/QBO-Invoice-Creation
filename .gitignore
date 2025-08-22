@@ -1,15 +1,13 @@
 # Ignore everything
 *
 
-# But not qbo_invoice_import.py
+# Allow core scripts and docs
 !qbo_invoice_import.py
-# But not qbo_invoice_download.py
 !qbo_invoice_download.py
-# But not qb_auth.py
 !qb_auth.py
-
-# And not .gitignore itself
+!README.md
+!.env.example
 !.gitignore
 
 # Ignore directories
-*/ 
+*/
