@@ -161,6 +161,21 @@ def get_unique_filename(file_path: str) -> str:
 def process_invoices(client: QuickBooks, csv_path: str):
     """Read the CSV and process each invoice for download."""
     print(f"🚀 Starting invoice download process from '{csv_path}'...")
+
+    def refresh_and_reinitialize(qb_client: QuickBooks) -> Optional[QuickBooks]:
+        """Refresh tokens and rebuild the QuickBooks client."""
+        if not refresh_access_token(qb_client, CONFIG):
+            print("🛑 Aborting process because token refresh failed.")
+            return None
+        if not load_tokens():
+            print("🛑 Failed to reload refreshed tokens.")
+            return None
+        new_client = initialize_quickbooks_client()
+        if not new_client:
+            print("🛑 Failed to reinitialize QuickBooks client after token refresh.")
+            return None
+        return new_client
+
     try:
         with open(csv_path, newline="", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
@@ -177,9 +192,10 @@ def process_invoices(client: QuickBooks, csv_path: str):
                     invoice_id = get_invoice_id(client, invoice_no)
                 except AuthorizationException:
                     print("🚨 QB Auth Exception 401: Token may have expired.")
-                    if not refresh_access_token(client, CONFIG):
-                        print("🛑 Aborting process because token refresh failed.")
+                    refreshed_client = refresh_and_reinitialize(client)
+                    if not refreshed_client:
                         break
+                    client = refreshed_client
                     print("✅ Token refreshed. Retrying the same invoice...")
                     try:
                         invoice_id = get_invoice_id(client, invoice_no)
@@ -193,9 +209,10 @@ def process_invoices(client: QuickBooks, csv_path: str):
                     pdf_content = download_invoice_pdf(client, invoice_id)
                 except AuthorizationException:
                     print("🚨 QB Auth Exception 401: Token may have expired.")
-                    if not refresh_access_token(client, CONFIG):
-                        print("🛑 Aborting process because token refresh failed.")
+                    refreshed_client = refresh_and_reinitialize(client)
+                    if not refreshed_client:
                         break
+                    client = refreshed_client
                     print("✅ Token refreshed. Retrying the same invoice...")
                     try:
                         pdf_content = download_invoice_pdf(client, invoice_id)
