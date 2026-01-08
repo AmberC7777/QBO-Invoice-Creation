@@ -293,7 +293,9 @@ def create_quickbooks_invoice(
             line = SalesItemLine()
             detail = SalesItemLineDetail()
             item = find_or_create_item(client, item_name)
-            if not item: continue
+            if not item:
+                print(f"🛑 Aborting invoice {inv_no} due to missing item '{item_name}'.")
+                return False
             qty, rate, amount = row.get("Quantity"), row.get("Rate"), row["Amount"]
             if auto_fill_qty_rate:
                 if qty is None and rate is None: qty, rate = 1, amount
