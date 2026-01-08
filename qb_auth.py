@@ -44,9 +44,13 @@ def refresh_access_token(
         with open(token_path, "w", encoding="utf-8") as f:
             json.dump(token_data, f, indent=4)
         print("💾 Tokens have been refreshed and saved to qb_tokens.json.")
+        prompt = "upload the 'qb_tokens.json' file to SharePoint, once done, enter 'ok'"
+        while True:
+            response = input(f"{prompt}\n").strip().lower()
+            if response == "ok":
+                break
         return True
     except Exception as e:
         print(f"❌ CRITICAL: Failed to refresh access token: {e}")
         print("   Please re-authenticate via the OAuth Playground and update qb_tokens.json.")
         return False
-
