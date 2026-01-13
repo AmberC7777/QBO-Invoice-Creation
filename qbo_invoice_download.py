@@ -161,6 +161,8 @@ def get_unique_filename(file_path: str) -> str:
 def process_invoices(client: QuickBooks, csv_path: str):
     """Read the CSV and process each invoice for download."""
     print(f"🚀 Starting invoice download process from '{csv_path}'...")
+    total = 0
+    success = 0
 
     def refresh_and_reinitialize(qb_client: QuickBooks) -> Optional[QuickBooks]:
         """Refresh tokens and rebuild the QuickBooks client."""
@@ -185,6 +187,7 @@ def process_invoices(client: QuickBooks, csv_path: str):
                 if not invoice_no or not file_name:
                     print("⚠️ Skipping row with missing InvoiceNo or FileName.")
                     continue
+                total += 1
 
                 print(f"\nProcessing InvoiceNo: {invoice_no}")
 
@@ -232,8 +235,10 @@ def process_invoices(client: QuickBooks, csv_path: str):
                     with open(unique_path, "wb") as pdf_file:
                         pdf_file.write(pdf_content)
                     print(f"✅ Successfully downloaded and saved to '{unique_path}'")
+                    success += 1
                 except IOError as e:
                     print(f"❌ Failed to save PDF to '{unique_path}': {e}")
+        print(f"\n📊 Summary: {success}/{total} invoices downloaded.")
     except FileNotFoundError:
         print(f"❌ Error: The file '{csv_path}' was not found.")
     except Exception as e:
