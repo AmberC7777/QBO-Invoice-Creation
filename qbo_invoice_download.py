@@ -238,7 +238,7 @@ def process_invoices(client: QuickBooks, csv_path: str):
                     success += 1
                 except IOError as e:
                     print(f"❌ Failed to save PDF to '{unique_path}': {e}")
-        print(f"\n📊 Summary: {success}/{total} invoices processed.")
+        print(f"\n📊 Summary: {success}/{total} invoices downloaded.")
     except FileNotFoundError:
         print(f"❌ Error: The file '{csv_path}' was not found.")
     except Exception as e:
