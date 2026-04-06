@@ -4,7 +4,7 @@ Python scripts for bulk importing invoices into QuickBooks Online and downloadin
 
 ## Features
 
-- Import invoices from `invoices.csv` with automatic customer and item creation.
+- Import invoices from `invoices.csv` — customers, items, and terms must already exist in QuickBooks (script aborts the invoice if any are not found).
 - Token handling with OAuth 2.0, including automatic access token refresh on 401 errors.
 - Correctly creates description-only line items and prevents unwanted default `ServiceDate`.
 - Set payment terms by name via the `Terms` column in the CSV.
